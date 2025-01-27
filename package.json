@@ -1,0 +1,17 @@
+{
+  "name": "js_scraper",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs"
+  },
+  "author": "jaykchen@icloud.com",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "esbuild": "^0.24.2",
+    "express": "^4.21.2",
+    "playwright-core": "^1.49.1"
+  }
+}

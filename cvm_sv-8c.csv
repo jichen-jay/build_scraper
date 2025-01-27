@@ -1,0 +1,2 @@
+﻿ID,实例名,地域,可用区,实例类型,实例规格,CPU(核数),内存(GB),GPU(卡数),操作系统,镜像Id,带宽(Mbps),系统盘类型,系统盘大小(GiB),VpcId,Vpc名称,子网Id,子网名称,网络类型,实例计费模式,网络计费模式,置放群组ID
+ins-ftzl18ho,vg-8c,硅谷,硅谷二区,标准型S8,S8.2XLARGE16,8,16,0,Debian 11.1 64位,img-4cmp1f33,1Mbps,增强型SSD云硬盘,50,vpc-qhy0p0t3,Default-VPC,subnet-apb4eea2,Default-Subnet,Default-VPC,按量计费-竞价,带宽按小时后付费,
