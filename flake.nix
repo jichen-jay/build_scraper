@@ -18,7 +18,6 @@
         pkgs = nixpkgs.legacyPackages.${system};
       in
       {
-
         packages.default = pkgs.buildNpmPackage {
           pname = "js_scraper";
           version = "1.0.0";
@@ -31,33 +30,56 @@
 
           npmDepsHash = "sha256-m1nSJ1MGYOOBZIFmZrwWak8rXkfV4Xig8HuSaMUebfc=";
 
+          # Skip the playwright browser download during install
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+
+          # Set npm to offline mode after dependencies are cached
+          npmFlags = [
+            "--ignore-scripts"
+            "--offline"
+          ];
+
+          # Ensure package-lock.json is consistent
+          postPatch = ''
+            cp ${./package-lock.json} package-lock.json
+          '';
+
           nativeBuildInputs = with pkgs; [
             makeWrapper
           ];
 
           buildInputs = with pkgs; [
             nodejs
-            playwright-driver
           ];
 
-          npmFlags = [ "--ignore-scripts" ];
+          # Allow network access during installation
+          NODE_OPTIONS = "--dns-result-order=ipv4first";
+
+          # Set Playwright to install browsers locally
+          PLAYWRIGHT_BROWSERS_PATH = "0";
 
           postInstall = ''
             # Build the project
             npm run build
 
+            # Install Playwright browsers locally
+            export HOME=$TMPDIR
+            npx playwright install chromium
+
             # Create necessary directories
             mkdir -p $out/lib/node_modules/js_scraper/dist
+            mkdir -p $out/lib/node_modules/js_scraper/.cache/ms-playwright
 
-            # Copy the built bundle
+            # Copy the built bundle and browsers
             cp dist/bundle.cjs $out/lib/node_modules/js_scraper/dist/
+            cp -r $TMPDIR/.cache/ms-playwright/* $out/lib/node_modules/js_scraper/.cache/ms-playwright/
 
             # Create the bin directory and wrapper
             mkdir -p $out/bin
             makeWrapper ${pkgs.nodejs}/bin/node $out/bin/js_scraper \
               --add-flags "$out/lib/node_modules/js_scraper/dist/bundle.cjs" \
               --set NODE_ENV "production" \
-              --set PLAYWRIGHT_BROWSERS_PATH "${pkgs.playwright-driver.browsers}" \
+              --set PLAYWRIGHT_BROWSERS_PATH "$out/lib/node_modules/js_scraper/.cache/ms-playwright" \
               --set NODE_PATH $out/lib/node_modules
           '';
 
@@ -71,11 +93,11 @@
         devShells.default = pkgs.mkShell {
           buildInputs = with pkgs; [
             nodejs
-            playwright-driver
           ];
 
           shellHook = ''
-            export PLAYWRIGHT_BROWSERS_PATH="${pkgs.playwright-driver.browsers}"
+            export PLAYWRIGHT_BROWSERS_PATH="0"
+            export NODE_OPTIONS="--dns-result-order=ipv4first"
             export NODE_PATH="$PWD/node_modules"
           '';
         };

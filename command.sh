@@ -8,3 +8,10 @@ nix run github:nix-community/nixos-anywhere -- --flake .#sv-nix root@43.130.1.17
 
 
 
+npm cache add playwright@latest
+
+npm cache add esbuild express playwright-core
+
+npm install --package-lock-only
+
+nix build --option sandbox false
