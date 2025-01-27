@@ -25,8 +25,8 @@
           src = pkgs.fetchFromGitHub {
             owner = "jichen-jay";
             repo = "build_scraper";
-            rev = "5fe9926ac158ea3090d8a5afe8a423e6d2e3c740";
-            hash = "sha256-SwD56+ZuxNSHHEERACokII5fs6zJwqaYCHxOFJnapoQ=";
+            rev = "c92b8276f2b7987f9edc93a8d05a8ed2d22b3c86";
+            hash = "sha256-PKIO/yA3NuNVoQv/jBkV8DD3kUg3bMMUzEEaFn0t0hg=";
           };
 
           npmDepsHash = "sha256-m1nSJ1MGYOOBZIFmZrwWak8rXkfV4Xig8HuSaMUebfc=";
