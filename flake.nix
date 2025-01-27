@@ -25,12 +25,11 @@
           src = pkgs.fetchFromGitHub {
             owner = "jichen-jay";
             repo = "build_scraper";
-            rev = "a8b98dc864571f175ad9024cd31a0e50ad8282d0";
-            hash = "sha256-VJZ+C90eGzJOmYayrYhOonvyYD/pZbU7Pi9a/uMeCu8=";
+            rev = "5fe9926ac158ea3090d8a5afe8a423e6d2e3c740";
+            hash = "sha256-SwD56+ZuxNSHHEERACokII5fs6zJwqaYCHxOFJnapoQ=";
           };
 
-          # npmDepsHash = pkgs.lib.fakeHash;
-          # npmDepsHash = "sha256-VJZ+C90eGzJOmYayrYhOonvyYD/pZbU7Pi9a/uMeCu8=";
+          npmDepsHash = "sha256-m1nSJ1MGYOOBZIFmZrwWak8rXkfV4Xig8HuSaMUebfc=";
 
           nativeBuildInputs = with pkgs; [
             makeWrapper
