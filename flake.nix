@@ -42,6 +42,10 @@
           # Ensure package-lock.json is consistent
           postPatch = ''
             cp ${./package-lock.json} package-lock.json
+
+            # Use a prepopulated cache directory for NPM
+            export npm_config_cache=/home/jaykchen/.npm
+            npm install --prefer-offline
           '';
 
           nativeBuildInputs = with pkgs; [
@@ -86,7 +90,7 @@
           meta = with pkgs.lib; {
             description = "JavaScript web scraper using Playwright";
             license = licenses.mit;
-            platforms = platforms.all;
+            platforms = [ "x86_64-linux" ];
           };
         };
 
