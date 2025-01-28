@@ -1,15 +1,43 @@
 import { chromium } from "playwright-core";
 import path from "path";
 import os from "os";
-import express from "express";
 import fs from "fs";
-import createCompress from "compress-brotli";
-import compression from 'compression';
-const { compress } = createCompress();
-
+import Fastify from "fastify";
+import fastifyCompress from "@fastify/compress";
 import { minify } from "html-minifier-terser";
 import { sanitizePageContent } from "./contentSanitizer.js";
 import { removeScrollBlockers } from "./scrollBlockerRemover.js";
+
+const fastify = Fastify({
+  logger: true,
+  connectionTimeout: 30000,
+  keepAliveTimeout: 30000,
+});
+
+await fastify.register(fastifyCompress, {
+  encodings: ["br", "gzip"],
+  brotli: {
+    quality: 4,
+    lgwin: 22,
+  },
+  threshold: 1024,
+  // onResponse: (request, reply, payload) => {
+  //   const originalSize = payload ? payload.length : 0;
+  //   const compressedSize = reply.getHeader("content-length");
+  //   const compressionRatio = (
+  //     ((originalSize - compressedSize) / originalSize) *
+  //     100
+  //   ).toFixed(2);
+
+  //   fastify.log.info({
+  //     msg: "Compression stats",
+  //     originalSize: `${(originalSize / 1024).toFixed(2)} KB`,
+  //     compressedSize: `${(compressedSize / 1024).toFixed(2)} KB`,
+  //     compressionRatio: `${compressionRatio}%`,
+  //     encoding: reply.getHeader("content-encoding") || "none",
+  //   });
+  // },
+});
 
 const purifyContent = `${fs.readFileSync("./src/purify.min.js", "utf8")}`;
 let browser;
@@ -198,51 +226,58 @@ async function openOneTab(targetUrl) {
 
 (async () => {
   await initializeBrowser();
-
-  const app = express();
-  const PORT = 5000;
-  app.use(compression({
-    level: 6, // compression level
-    filter: (req, res) => {
-      return compression.filter(req, res);
-    }
-  }));
-
-  app.get("/", async (req, res) => {
-    const targetUrl = req.query.url;
+  fastify.get("/", async (request, reply) => {
+    const targetUrl = request.query.url;
 
     if (!targetUrl) {
-      return res.status(400).send('Error: Missing "url" query parameter.');
+      reply.code(400).send('Error: Missing "url" query parameter.');
+      return;
     }
 
     try {
-      const returnedContent = await openOneTab(targetUrl);
-      const acceptEncoding = req.headers["accept-encoding"] || "";
-      if (acceptEncoding.includes("br")) {
-        console.log(`browser accept br encoding`);
-        res.set({
-          "Content-Encoding": "br",
-          "Content-Type": "text/html; charset=utf-8",
-          "Cache-Control": "no-cache",
-          Vary: "Accept-Encoding",
-          "Content-Length": returnedContent.length,
-        });
-      }
+      const content = await openOneTab(targetUrl);
 
-      res.send(returnedContent);
+      reply
+        .header("Content-Type", "text/html; charset=utf-8")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive");
+
+      return content;
     } catch (error) {
-      console.error(error);
-      res.status(500).send("Error processing the webpage.");
+      request.log.error(error);
+      reply.code(500).send("Error processing the webpage.");
     }
   });
 
-  app.listen(PORT, () => {
-    console.log(`Server is running at http://localhost:${PORT}`);
+  fastify.setErrorHandler((error, request, reply) => {
+    request.log.error(error);
+    reply.code(500).send({ error: "Internal Server Error" });
   });
 
+  const start = async () => {
+    try {
+      await fastify.listen({
+        port: 5000,
+        host: "0.0.0.0", // Listen on all network interfaces
+      });
+    } catch (err) {
+      fastify.log.error(err);
+      process.exit(1);
+    }
+  };
+
   process.on("SIGINT", async () => {
-    console.log("\nClosing browser...");
-    await browser.close();
-    process.exit(0);
+    console.log("\nInitiating graceful shutdown...");
+    try {
+      await browser.close();
+      await fastify.close();
+      console.log("Server closed successfully");
+      process.exit(0);
+    } catch (err) {
+      console.error("Error during shutdown:", err);
+      process.exit(1);
+    }
   });
+
+  start();
 })();
