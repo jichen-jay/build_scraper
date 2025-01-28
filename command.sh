@@ -13,6 +13,8 @@ npm cache clean --force
 npm install --cache /home/jaykchen/.npm   --prefer-offlin
 
 npm cache add playwright@latest
+export PLAYWRIGHT_BROWSERS_PATH=/home/jaykchen/.npm
+npx playwright install chromium --force
 
 npm cache add esbuild express playwright-core
 
@@ -21,6 +23,7 @@ npm install --package-lock-only
 nix build --option sandbox false
 
 
-nix build --log-format pretty
+nix build --show-trace --log-format internal-json
+
 
 

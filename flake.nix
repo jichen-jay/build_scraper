@@ -39,13 +39,22 @@
             "--offline"
           ];
 
-          # Ensure package-lock.json is consistent
           postPatch = ''
             cp ${./package-lock.json} package-lock.json
 
             # Use a prepopulated cache directory for NPM
-            export npm_config_cache=/home/jaykchen/.npm
+            export npm_config_cache=$TMPDIR/npm-cache
+            mkdir -p $npm_config_cache
+
+            # Install dependencies in offline mode
             npm install --prefer-offline
+
+            # Set Playwright to download browsers into a specific directory
+            export PLAYWRIGHT_BROWSERS_PATH=$TMPDIR/ms-playwright
+            mkdir -p $PLAYWRIGHT_BROWSERS_PATH
+
+            # Download Chromium browser binary
+            npx playwright install chromium
           '';
 
           nativeBuildInputs = with pkgs; [

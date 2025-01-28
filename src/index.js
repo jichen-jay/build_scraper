@@ -3,6 +3,13 @@ import path from "path";
 import os from "os";
 import express from "express";
 import fs from "fs";
+import createCompress from "compress-brotli";
+import compression from 'compression';
+const { compress } = createCompress();
+
+import { minify } from "html-minifier-terser";
+import { sanitizePageContent } from "./contentSanitizer.js";
+import { removeScrollBlockers } from "./scrollBlockerRemover.js";
 
 const purifyContent = `${fs.readFileSync("./src/purify.min.js", "utf8")}`;
 let browser;
@@ -30,7 +37,7 @@ async function initializeBrowser() {
       userAgent: mobile_user_agent,
       ignoreDefaultArgs: ["--enable-automation"],
       ignoreHTTPSErrors: true,
-      bypassCSP: true
+      bypassCSP: true,
     });
 
     await browser.addInitScript(() => {
@@ -57,6 +64,8 @@ async function validateAndParseUrl(inputUrl) {
   }
 }
 
+var rawSize;
+
 async function openOneTab(targetUrl) {
   const page = await browser.newPage();
   console.log(`Opening page: ${targetUrl}`);
@@ -70,55 +79,26 @@ async function openOneTab(targetUrl) {
     console.log(`Validated URL: ${validUrl}`);
     const originalDomain = new URL(validUrl).origin;
 
-    await page.addInitScript(() => {
-      const metaTags = document.querySelectorAll(
-        'meta[http-equiv="Content-Security-Policy"]'
-      );
-      metaTags.forEach((meta) => meta.remove());
-      console.log("Removed CSP meta tags.");
-    });
-
     await page.goto(validUrl, {
       waitUntil: "domcontentloaded",
       timeout: 45000,
     });
 
+    const htmlContent = await page.content();
+
+    rawSize = Buffer.byteLength(htmlContent, "utf8");
+
     await page.evaluate(() => {
       if (window.trustedTypes && window.trustedTypes.createPolicy) {
-        const policy = window.trustedTypes.createPolicy('default', {
-          createHTML: string => string,
-          createScriptURL: string => string,
-          createScript: string => string
+        const policy = window.trustedTypes.createPolicy("default", {
+          createHTML: (string) => string,
+          createScriptURL: (string) => string,
+          createScript: (string) => string,
         });
         return policy;
       }
     });
-    
-    // await page.addScriptTag({
-    //   content: yourScript,
-    //   type: 'module'
-    // });
-    
-    
-    // Remove blocking elements and guard dog scripts
-    // await page.evaluate(() => {
-    //   document.querySelectorAll("script").forEach((script) => {
-    //     if (
-    //       script.src.includes("csp") ||
-    //       script.src.includes("guarddog") ||
-    //       script.src.includes("security")
-    //     ) {
-    //       console.log(`Removing suspected guard dog script: ${script.src}`);
-    //       script.remove();
-    //     }
-    //   });
 
-    //   document
-    //     .querySelectorAll("[class*='modal'], [class*='overlay'], [class*='ad']")
-    //     .forEach((el) => el.remove());
-    // });
-
-    // const purifyContent = fs.readFileSync("./src/purify.min.js", "utf8");
     await page.addScriptTag({
       content: purifyContent,
       type: "module",
@@ -183,314 +163,34 @@ async function openOneTab(targetUrl) {
       });
     });
 
-    await page.evaluate((domainToUse) => {
-      const cleanupSelectors = [
-        "script",
-        "noscript",
-        "iframe",
-        "style:not([data-essential])",
-        '[class*="tracking"]',
-        '[class*="analytics"]',
+    await sanitizePageContent(page, originalDomain);
 
-        // Interactive elements
-        '[class*="modal"]',
-        '[class*="popup"]',
-        '[class*="overlay"]',
-        '[class*="drawer"]',
-        '[class*="dialog"]',
-        ".tp-modal",
-        ".tp-backdrop",
-        ".tp-please-wait",
+    await removeScrollBlockers(page);
 
-        // Social/Sharing
-        '[class*="share"]',
-        '[class*="social"]',
+    console.log(`more than ${rawSize} bytes downloaded`);
 
-        // Comments and related content
-        '[class*="comment"]',
-        '[class*="related"]',
-        '[class*="recommendation"]',
+    const sanitizedHTML = await page.content();
 
-        // Ads and newsletters
-        '[class*="newsletter"]',
-        '[class*="ad-"]',
-        '[class*="advertisement"]',
-      ];
+    let size = Buffer.byteLength(sanitizedHTML, "utf8");
 
-      cleanupSelectors.forEach((selector) => {
-        document.querySelectorAll(selector).forEach((el) => el.remove());
-      });
+    console.log(`Sanitized content size before compression: ${size} bytes`);
 
-      const mainContent =
-        document.querySelector("article") || document.querySelector(".content");
-      if (mainContent) {
-        mainContent.style.cssText = `
-          max-width: 800px;
-          margin: 0 auto;
-          padding: 20px;
-          font-family: system-ui, -apple-system, sans-serif;
-          font-size: 18px;
-          line-height: 1.6;
-          color: #222;
-          background: #fff;
-        `;
-      }
+    if (!sanitizedHTML.includes("<html")) {
+      sanitizedHTML = `<html><head></head><body>${sanitizedHTML}</body></html>`;
+    }
 
-      if (window.DOMPurify) {
-        DOMPurify.addHook("beforeSanitizeElements", (node) => {
-          if (node && node.tagName) {
-            console.log(`[DOMPurify Debug] Before sanitizing: ${node.tagName}`);
-          }
-          return node;
-        });
-
-        DOMPurify.addHook("uponSanitizeElement", (node, data) => {
-          if (data && data.tagName) {
-            console.log(`[DOMPurify Debug] Processing: ${data.tagName}`);
-          }
-          if (data.tagName === "a") {
-            console.log("<a> tag found, checking attributes...");
-            const href = node.getAttribute("href");
-            if (href) {
-              const parsedHref = new URL(href, domainToUse);
-              if (parsedHref.protocol === "javascript:") {
-                console.log(
-                  "[Node Debug] JavaScript link detected, removing..."
-                );
-                node.remove();
-                return;
-              }
-
-              console.log(`[Node Debug] Original href: ${href}`);
-              console.log(`[Node Debug] Parsed URL: ${parsedHref.toString()}`);
-
-              if (!parsedHref.href.includes("localhost:5000")) {
-                const newHref = `http://localhost:5000/?url=${encodeURIComponent(
-                  parsedHref.href
-                )}`;
-                console.log(`[Node Debug] Modified URL: ${newHref}`);
-                node.setAttribute("href", newHref);
-              }
-
-              node.setAttribute("target", "_blank");
-              node.setAttribute("rel", "noopener noreferrer");
-            }
-
-            if (
-              node.children &&
-              node.children.length === 0 &&
-              !node.textContent.trim() &&
-              !["IMG", "SOURCE"].includes(node.tagName)
-            ) {
-              console.log(`Removing empty element: ${data.tagName}`);
-              node.remove();
-            }
-          }
-        });
-
-        // NEW: Enhanced DOMPurify config
-        const purifyConfig = {
-          ADD_TAGS: [
-            "main",
-            "article",
-            "section",
-            "figure",
-            "figcaption",
-            "img",
-            "p",
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            "h6",
-            "a",
-            "ul",
-            "li",
-            "ol",
-            "table",
-            "tr",
-            "td",
-            "th",
-          ],
-          FORBID_TAGS: [
-            "script",
-            "style",
-            "iframe",
-            "frame",
-            "embed",
-            "object",
-            "param",
-            "form",
-            "input",
-            "textarea",
-            "button",
-            "select",
-            "option",
-            "nav",
-            "aside",
-            "footer",
-            "header",
-          ],
-          ALLOWED_ATTR: [
-            "src",
-            "alt",
-            "href",
-            "target",
-            "rel",
-            "title",
-            "width",
-            "height",
-          ],
-          FORBID_ATTR: [
-            "onclick",
-            "onload",
-            "onerror",
-            "onmouseover",
-            "onmouseout",
-            "onkeydown",
-            "onkeyup",
-            "data-src",
-            "data-srcset",
-            "loading",
-            "role",
-          ],
-          KEEP_CONTENT: true,
-          WHOLE_DOCUMENT: true,
-          SANITIZE_DOM: true,
-          ALLOW_DATA_ATTR: false,
-          RETURN_TRUSTED_TYPE: true,
-        };
-
-        const cleanHTML = DOMPurify.sanitize(
-          document.documentElement.innerHTML,
-          purifyConfig
-        );
-        document.documentElement.innerHTML = cleanHTML;
-
-        // NEW: Final cleanup after sanitization
-        document.querySelectorAll("*").forEach((el) => {
-          if (
-            el.children.length === 0 &&
-            !el.textContent.trim() &&
-            !["IMG", "SOURCE", "BR", "HR"].includes(el.tagName)
-          ) {
-            el.remove();
-          }
-
-          if (el !== mainContent) {
-            el.removeAttribute("style");
-          }
-        });
-
-        const anch = document.querySelectorAll("a");
-        console.log("Anchors after second pass:", anch.length);
-      }
-    }, originalDomain);
-
-    await page.evaluate(() => {
-      const purifierScript = document.querySelector(
-        'script[src*="purify.min.js"]'
-      );
-      if (purifierScript) purifierScript.remove();
-
-      const scrollBlockingSelectors = [
-        ".sp-message-open",
-        '[class*="modal"]',
-        '[class*="popup"]',
-        '[class*="overlay"]',
-        '[class*="dialog"]',
-        ".o-header__drawer",
-        ".o-header__mega",
-        ".o-header__search",
-        ".typeahead__main-container",
-      ];
-
-      // Remove classes and reset styles for each matching element
-      scrollBlockingSelectors.forEach((selector) => {
-        document.querySelectorAll(selector).forEach((element) => {
-          // Remove scroll blocking classes
-          element.classList.remove("sp-message-open");
-          element.removeAttribute("aria-hidden");
-          element.removeAttribute("aria-expanded");
-
-          // Reset scroll blocking styles
-          element.style.cssText = `
-            position: static !important;
-            overflow: visible !important;
-            height: auto !important;
-            width: auto !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            top: auto !important;
-            left: auto !important;
-            right: auto !important;
-            bottom: auto !important;
-            transform: none !important;
-            pointer-events: auto !important;
-            display: block !important;
-          `;
-        });
-      });
-
-      // Reset html and body
-      [document.documentElement, document.body].forEach((elem) => {
-        elem.style.cssText = `
-          overflow: visible !important;
-          overflow-x: visible !important;
-          overflow-y: visible !important;
-          position: static !important;
-          height: auto !important;
-          width: auto !important;
-          margin: 0 !important;
-          padding: 0 !important;
-          pointer-events: auto !important;
-        `;
-      });
-
-      // Enable pointer events and interactions
-      document.querySelectorAll("*").forEach((elem) => {
-        elem.style.pointerEvents = "auto";
-        elem.style.cursor =
-          elem.tagName.toLowerCase() === "a" ||
-          elem.tagName.toLowerCase() === "button"
-            ? "pointer"
-            : "auto";
-      });
-
-      // Enable specific interactive elements
-      document
-        .querySelectorAll('a, button, input, select, [role="button"]')
-        .forEach((elem) => {
-          elem.style.pointerEvents = "auto";
-          elem.style.cursor = "pointer";
-          elem.removeAttribute("disabled");
-          elem.removeAttribute("aria-disabled");
-          elem.setAttribute("tabindex", "0");
-        });
-
-      // Fix specific menu/navigation elements
-      document
-        .querySelectorAll(".o-header__nav-link, .o-header__top-link-label")
-        .forEach((elem) => {
-          elem.style.pointerEvents = "auto";
-          elem.style.cursor = "pointer";
-          elem.removeAttribute("aria-hidden");
-        });
-
-      // Enable click events on containers
-      document
-        .querySelectorAll(
-          ".story-group, .story-group__article, .primary-story__teaser"
-        )
-        .forEach((elem) => {
-          elem.style.pointerEvents = "auto";
-        });
+    const minifiedHTML = await minify(sanitizedHTML, {
+      collapseWhitespace: true,
+      removeComments: true,
+      minifyCSS: true,
+      minifyJS: true,
     });
 
-    // Get the sanitized HTML content
-    const sanitizedHTML = await page.content();
-    return sanitizedHTML;
+    console.log(
+      `Minified HTML size: ${Buffer.byteLength(minifiedHTML, "utf8")} bytes`
+    );
+
+    return minifiedHTML;
   } finally {
     await page.close();
   }
@@ -501,6 +201,12 @@ async function openOneTab(targetUrl) {
 
   const app = express();
   const PORT = 5000;
+  app.use(compression({
+    level: 6, // compression level
+    filter: (req, res) => {
+      return compression.filter(req, res);
+    }
+  }));
 
   app.get("/", async (req, res) => {
     const targetUrl = req.query.url;
@@ -511,6 +217,18 @@ async function openOneTab(targetUrl) {
 
     try {
       const returnedContent = await openOneTab(targetUrl);
+      const acceptEncoding = req.headers["accept-encoding"] || "";
+      if (acceptEncoding.includes("br")) {
+        console.log(`browser accept br encoding`);
+        res.set({
+          "Content-Encoding": "br",
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-cache",
+          Vary: "Accept-Encoding",
+          "Content-Length": returnedContent.length,
+        });
+      }
+
       res.send(returnedContent);
     } catch (error) {
       console.error(error);
