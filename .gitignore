@@ -8,3 +8,4 @@ dist
 app
 ./result
 result
+server/target
