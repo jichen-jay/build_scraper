@@ -9,3 +9,6 @@ app
 ./result
 result
 server/target
+server/localhost.key.der
+server/localhost.der
+server/server
