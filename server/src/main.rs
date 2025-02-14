@@ -1,11 +1,10 @@
+use brotlic::{BlockSize, BrotliEncoderOptions, CompressorWriter, Quality, WindowSize};
 use bytes::Bytes;
-use bytes::BytesMut;
-use h3::{error::ErrorLevel, quic::BidiStream, server::RequestStream};
-use h3_quinn::quinn::{self, crypto::rustls::QuicServerConfig, ServerConfig};
+use h3::{quic::BidiStream, server::RequestStream};
+use h3_quinn::quinn::{self, crypto::rustls::QuicServerConfig};
 use http::{Request, Response, StatusCode};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde_json::{json, Value};
-use std::fs::File;
 use std::path::PathBuf;
 use std::{
     io::{Read, Write},
@@ -15,7 +14,6 @@ use std::{
 };
 use tokio;
 use tracing::{error, info};
-use url::Url;
 
 static ALPN: &[u8] = b"h3";
 
@@ -83,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_request<T>(
     req: Request<()>,
     mut stream: RequestStream<T, Bytes>,
-    serve_root: Arc<Option<PathBuf>>,
+    _serve_root: Arc<Option<PathBuf>>,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
     T: BidiStream<Bytes>,
@@ -94,60 +92,72 @@ where
             .map(|(_, value)| value.to_string())
     });
 
-    let (response_bytes, content_type) = match url {
+    match url {
         Some(url_to_scrape) => {
-            if !url_to_scrape.starts_with("http://") && !url_to_scrape.starts_with("https://") {
-                (
-                    Bytes::from(
+            match scrape_url(&url_to_scrape) {
+                Ok(html_content) => {
+                    let encoder = BrotliEncoderOptions::new()
+                        .quality(Quality::new(6)?) // Add ? operator for error handling
+                        .window_size(WindowSize::new(22)?) // 22 is recommended window size
+                        .block_size(BlockSize::new(24)?) // Use new() instead of default()
+                        .build()?;
+
+                    let mut compressed_writer = CompressorWriter::with_encoder(encoder, Vec::new());
+                    compressed_writer.write_all(html_content.as_bytes())?;
+                    let compressed_data = compressed_writer.into_inner()?;
+
+                    let resp = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/html; charset=utf-8")
+                        .header("content-encoding", "br")
+                        .body(())?;
+
+                    stream.send_response(resp).await?;
+                    stream.send_data(Bytes::from(compressed_data)).await?;
+                }
+                Err(e) => {
+                    let error_response = Bytes::from(
                         json!({
                             "status": "error",
-                            "error": "URL must start with http:// or https://"
+                            "error": e.to_string()
                         })
                         .to_string(),
-                    ),
-                    "application/json",
-                )
-            } else {
-                match scrape_url(&url_to_scrape) {
-                    Ok(content) => (Bytes::from(content), "text/html"),
-                    Err(e) => (
-                        Bytes::from(
-                            json!({
-                                "status": "error",
-                                "error": e.to_string()
-                            })
-                            .to_string(),
-                        ),
-                        "application/json",
-                    ),
+                    );
+
+                    let resp = Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/json")
+                        .body(())?;
+
+                    stream.send_response(resp).await?;
+                    stream.send_data(error_response).await?;
                 }
             }
         }
-        None => (
-            Bytes::from(
+        None => {
+            let error_response = Bytes::from(
                 json!({
                     "status": "error",
                     "error": "No URL provided. Use ?url=https://example.com"
                 })
                 .to_string(),
-            ),
-            "application/json",
-        ),
-    };
+            );
 
-    let resp = Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", content_type)
-        .body(())?;
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "application/json")
+                .body(())?;
 
-    stream.send_response(resp).await?;
-    stream.send_data(response_bytes).await?;
+            stream.send_response(resp).await?;
+            stream.send_data(error_response).await?;
+        }
+    }
+
     stream.finish().await?;
     Ok(())
 }
-use brotlic::{CompressorWriter, DecompressorReader};
 
-fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let mut stream = TcpStream::connect("127.0.0.1:3000")?;
 
     let encoded_url = urlencoding::encode(url);
@@ -167,6 +177,7 @@ fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
 
     if let Some(body_start) = response.find("\r\n\r\n") {
         let json_str = &response[body_start + 4..];
+
         let parsed: Value = serde_json::from_str(json_str)?;
 
         if let Some(content) = parsed.get("content") {
@@ -176,7 +187,7 @@ fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
                 .unwrap_or("utf-8");
 
             // Set response headers for browser
-            let resp = Response::builder()
+            let _resp = Response::builder()
                 .status(StatusCode::OK)
                 .header("content-type", format!("text/html; charset={}", charset))
                 .header("content-encoding", "br")

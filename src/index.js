@@ -8,11 +8,9 @@ import { sanitizePageContent } from "./contentSanitizer.js";
 import { removeScrollBlockers } from "./scrollBlockerRemover.js";
 import net from 'net';
 
-
-
-
 const purifyContent = `${fs.readFileSync("./src/purify.min.js", "utf8")}`;
 let browser;
+
 async function initializeBrowser() {
   try {
     const userDataDir = path.join(os.homedir(), ".playwright-chromium-data");
@@ -22,7 +20,6 @@ async function initializeBrowser() {
 
     fs.mkdirSync(crashpadDir, { recursive: true });
     fs.mkdirSync(path.join(userDataDir, "crashes"), { recursive: true });
-
 
     browser = await chromium.launchPersistentContext(userDataDir, {
       executablePath: process.env.CHROMIUM_PATH,
@@ -55,14 +52,11 @@ async function initializeBrowser() {
       fs.unlinkSync(path.join(userDataDir, "Default", "SingletonLock"));
     }
 
-
   } catch (error) {
     console.error("Failed to launch the browser:", error);
     process.exit(1);
   }
 }
-
-
 
 async function validateAndParseUrl(inputUrl) {
   try {
@@ -93,15 +87,6 @@ async function openOneTab(targetUrl) {
     await page.goto(validUrl, {
       waitUntil: "domcontentloaded",
       timeout: 45000,
-    });
-
-
-    const charset = await page.evaluate(() => {
-      const meta = document.querySelector('meta[charset], meta[http-equiv="Content-Type"]');
-      if (meta) {
-        return meta.getAttribute('charset') || meta.getAttribute('content').match(/charset=([^;]+)/)?.[1];
-      }
-      return 'utf-8';
     });
 
     const htmlContent = await page.content();
@@ -240,13 +225,8 @@ const server = net.createServer(async (socket) => {
         const content = await openOneTab(url);
         const response = JSON.stringify({
           status: 'success',
-          content: content,
-          contentType: 'text/html',
-          charset: charset,
-          encoding: 'br' 
+          content
         });
-
-        
 
         socket.write(headers.replace('${length}', Buffer.byteLength(response)) + response);
       } catch (error) {
@@ -276,11 +256,3 @@ const server = net.createServer(async (socket) => {
   });
 })();
 
-async function compress(buffer) {
-  const brotli = require('brotli');
-  return brotli.compress(buffer, {
-    mode: 0, // text mode
-    quality: 11, // maximum compression
-    lgwin: 22 // maximum window size
-  });
-}
