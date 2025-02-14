@@ -26,4 +26,5 @@ nix build --option sandbox false
 nix build --show-trace --log-format internal-json
 
 
-
+rm -rf /home/jaykchen/.playwright-chromium-data/sessionstore-backups
+rm -f /home/jaykchen/.playwright-chromium-data/sessionstore.jsonlz4

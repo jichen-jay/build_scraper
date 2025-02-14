@@ -13,12 +13,16 @@ import net from 'net';
 
 const purifyContent = `${fs.readFileSync("./src/purify.min.js", "utf8")}`;
 let browser;
-
 async function initializeBrowser() {
   try {
     const userDataDir = path.join(os.homedir(), ".playwright-chromium-data");
     const mobile_user_agent =
       "Mozilla/5.0 (Linux; Android 14; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+    const crashpadDir = path.join(userDataDir, "crashpad");
+
+    fs.mkdirSync(crashpadDir, { recursive: true });
+    fs.mkdirSync(path.join(userDataDir, "crashes"), { recursive: true });
+
 
     browser = await chromium.launchPersistentContext(userDataDir, {
       executablePath: process.env.CHROMIUM_PATH,
@@ -33,6 +37,9 @@ async function initializeBrowser() {
         "--disable-extensions",
         "--disable-popup-blocking",
         "--disable-notifications",
+        '--crashpad-handler-pid=0',
+        `--crash-dumps-dir=${userDataDir}/crashes`,
+        `--crash-handler-database=${crashpadDir}`,
       ],
       userAgent: mobile_user_agent,
       ignoreDefaultArgs: ["--enable-automation"],
@@ -47,11 +54,15 @@ async function initializeBrowser() {
     if (fs.existsSync(path.join(userDataDir, "Default", "SingletonLock"))) {
       fs.unlinkSync(path.join(userDataDir, "Default", "SingletonLock"));
     }
+
+
   } catch (error) {
     console.error("Failed to launch the browser:", error);
     process.exit(1);
   }
 }
+
+
 
 async function validateAndParseUrl(inputUrl) {
   try {
@@ -222,7 +233,7 @@ const server = net.createServer(async (socket) => {
           status: 'success',
           content
         });
-        
+
         socket.write(headers.replace('${length}', Buffer.byteLength(response)) + response);
       } catch (error) {
         const errorResponse = JSON.stringify({
