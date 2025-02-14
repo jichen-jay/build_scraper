@@ -98,30 +98,40 @@ where
         })
         .unwrap_or_default();
 
-    let url = params
-        .iter()
-        .find(|(k, _)| k == "url")
-        .map(|(_, v)| v.clone());
+    let url = req.uri().query().and_then(|v| {
+        url::form_urlencoded::parse(v.as_bytes())
+            .find(|(key, _)| key == "url")
+            .map(|(_, value)| value.to_string())
+    });
 
     let response_data = match url {
-        Some(url_to_scrape) => match scrape_url(&url_to_scrape) {
-            Ok(content) => json!({
-                "status": "success",
-                "content": content
-            }),
-            Err(e) => json!({
-                "status": "error",
-                "error": e.to_string()
-            }),
-        },
+        Some(url_to_scrape) => {
+            // Validate URL
+            if !url_to_scrape.starts_with("http://") && !url_to_scrape.starts_with("https://") {
+                json!({
+                    "status": "error",
+                    "error": "URL must start with http:// or https://"
+                })
+            } else {
+                match scrape_url(&url_to_scrape) {
+                    Ok(content) => json!({
+                        "status": "success",
+                        "content": content
+                    }),
+                    Err(e) => json!({
+                        "status": "error",
+                        "error": e.to_string()
+                    }),
+                }
+            }
+        }
         None => json!({
             "status": "error",
-            "error": "No URL provided"
+            "error": "No URL provided. Use ?url=https://example.com"
         }),
     };
 
     let response_bytes = Bytes::from(response_data.to_string());
-
     let resp = Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "application/json")
@@ -136,16 +146,14 @@ where
 fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect("127.0.0.1:3000")?;
 
+    // Format the path for JavaScript server
+    let encoded_url = urlencoding::encode(url);
     let request = format!(
-        "POST /scrape HTTP/1.1\r\n\
+        "GET /scrape/{} HTTP/1.1\r\n\
          Host: localhost:3000\r\n\
-         Content-Type: application/json\r\n\
-         Content-Length: {}\r\n\
          Connection: close\r\n\
-         \r\n\
-         {{\"url\":\"{}\"}}",
-        url.len() + 9,
-        url
+         \r\n",
+        encoded_url
     );
 
     stream.write_all(request.as_bytes())?;
