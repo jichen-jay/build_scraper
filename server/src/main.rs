@@ -47,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let endpoint = quinn::Endpoint::server(
         server_config,
-        "127.0.0.1:4433".parse::<SocketAddr>()?,
+        "[::1]:4433".parse::<SocketAddr>()?,
         // "0.0.0.0:4433".parse::<SocketAddr>()?,
     )?;
 
@@ -88,53 +88,56 @@ async fn handle_request<T>(
 where
     T: BidiStream<Bytes>,
 {
-    let params: Vec<(String, String)> = req
-        .uri()
-        .query()
-        .map(|v| {
-            url::form_urlencoded::parse(v.as_bytes())
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
     let url = req.uri().query().and_then(|v| {
         url::form_urlencoded::parse(v.as_bytes())
             .find(|(key, _)| key == "url")
             .map(|(_, value)| value.to_string())
     });
 
-    let response_data = match url {
+    let (response_bytes, content_type) = match url {
         Some(url_to_scrape) => {
-            // Validate URL
             if !url_to_scrape.starts_with("http://") && !url_to_scrape.starts_with("https://") {
-                json!({
-                    "status": "error",
-                    "error": "URL must start with http:// or https://"
-                })
+                (
+                    Bytes::from(
+                        json!({
+                            "status": "error",
+                            "error": "URL must start with http:// or https://"
+                        })
+                        .to_string(),
+                    ),
+                    "application/json",
+                )
             } else {
                 match scrape_url(&url_to_scrape) {
-                    Ok(content) => json!({
-                        "status": "success",
-                        "content": content
-                    }),
-                    Err(e) => json!({
-                        "status": "error",
-                        "error": e.to_string()
-                    }),
+                    Ok(content) => (Bytes::from(content), "text/html"),
+                    Err(e) => (
+                        Bytes::from(
+                            json!({
+                                "status": "error",
+                                "error": e.to_string()
+                            })
+                            .to_string(),
+                        ),
+                        "application/json",
+                    ),
                 }
             }
         }
-        None => json!({
-            "status": "error",
-            "error": "No URL provided. Use ?url=https://example.com"
-        }),
+        None => (
+            Bytes::from(
+                json!({
+                    "status": "error",
+                    "error": "No URL provided. Use ?url=https://example.com"
+                })
+                .to_string(),
+            ),
+            "application/json",
+        ),
     };
 
-    let response_bytes = Bytes::from(response_data.to_string());
     let resp = Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", "application/json")
+        .header("content-type", content_type)
         .body(())?;
 
     stream.send_response(resp).await?;
@@ -142,11 +145,11 @@ where
     stream.finish().await?;
     Ok(())
 }
+use brotlic::{CompressorWriter, DecompressorReader};
 
 fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
     let mut stream = TcpStream::connect("127.0.0.1:3000")?;
 
-    // Format the path for JavaScript server
     let encoded_url = urlencoding::encode(url);
     let request = format!(
         "GET /scrape/{} HTTP/1.1\r\n\
@@ -165,8 +168,23 @@ fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error>> {
     if let Some(body_start) = response.find("\r\n\r\n") {
         let json_str = &response[body_start + 4..];
         let parsed: Value = serde_json::from_str(json_str)?;
-        Ok(parsed.to_string())
-    } else {
-        Err("Invalid HTTP response".into())
+
+        if let Some(content) = parsed.get("content") {
+            let charset = parsed
+                .get("charset")
+                .and_then(|v| v.as_str())
+                .unwrap_or("utf-8");
+
+            // Set response headers for browser
+            let resp = Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", format!("text/html; charset={}", charset))
+                .header("content-encoding", "br")
+                .body(())?;
+
+            // Return the Brotli-compressed content
+            return Ok(content.as_str().unwrap_or_default().to_string());
+        }
     }
+    Err("Invalid response".into())
 }

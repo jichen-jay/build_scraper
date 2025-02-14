@@ -95,6 +95,15 @@ async function openOneTab(targetUrl) {
       timeout: 45000,
     });
 
+
+    const charset = await page.evaluate(() => {
+      const meta = document.querySelector('meta[charset], meta[http-equiv="Content-Type"]');
+      if (meta) {
+        return meta.getAttribute('charset') || meta.getAttribute('content').match(/charset=([^;]+)/)?.[1];
+      }
+      return 'utf-8';
+    });
+
     const htmlContent = await page.content();
 
     rawSize = Buffer.byteLength(htmlContent, "utf8");
@@ -231,8 +240,13 @@ const server = net.createServer(async (socket) => {
         const content = await openOneTab(url);
         const response = JSON.stringify({
           status: 'success',
-          content
+          content: content,
+          contentType: 'text/html',
+          charset: charset,
+          encoding: 'br' 
         });
+
+        
 
         socket.write(headers.replace('${length}', Buffer.byteLength(response)) + response);
       } catch (error) {
@@ -262,3 +276,11 @@ const server = net.createServer(async (socket) => {
   });
 })();
 
+async function compress(buffer) {
+  const brotli = require('brotli');
+  return brotli.compress(buffer, {
+    mode: 0, // text mode
+    quality: 11, // maximum compression
+    lgwin: 22 // maximum window size
+  });
+}
