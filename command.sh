@@ -28,3 +28,15 @@ nix build --show-trace --log-format internal-json
 
 rm -rf /home/jaykchen/.playwright-chromium-data/sessionstore-backups
 rm -f /home/jaykchen/.playwright-chromium-data/sessionstore.jsonlz4
+
+
+echo '/scrape/https://example.com' | websocat -v --no-close ws://localhost:3000
+
+chromium --enable-quic --quic-version=h3 --origin-to-force-quic-on=localhost:4433 --allow-insecure-localhost
+google-chrome-stable --origin-to-force-quic-on=localhost:4433
+
+//For local development with self-signed certificates, you'll typically also need additional flags like 
+--ignore-certificate-errors-spki-list
+
+lsof -ti :3000 | xargs kill -9
+

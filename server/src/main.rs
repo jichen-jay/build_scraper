@@ -1,5 +1,6 @@
 use brotlic::{BlockSize, BrotliEncoderOptions, CompressorWriter, Quality, WindowSize};
 use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
 use h3::{quic::BidiStream, server::RequestStream};
 use h3_quinn::quinn::{self, crypto::rustls::QuicServerConfig};
 use http::{Request, Response, StatusCode};
@@ -13,6 +14,7 @@ use std::{
     sync::Arc,
 };
 use tokio;
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{error, info};
 
 static ALPN: &[u8] = b"h3";
@@ -94,7 +96,7 @@ where
 
     match url {
         Some(url_to_scrape) => {
-            match scrape_url(&url_to_scrape) {
+            match scrape_url_ws(&url_to_scrape).await {
                 Ok(html_content) => {
                     let encoder = BrotliEncoderOptions::new()
                         .quality(Quality::new(6)?) // Add ? operator for error handling
@@ -198,4 +200,31 @@ fn scrape_url(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sy
         }
     }
     Err("Invalid response".into())
+}
+
+async fn scrape_url_ws(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let ws_url = url::Url::parse("ws://127.0.0.1:3000")?;
+    let (ws_stream, _) = connect_async(ws_url).await?;
+    let (mut write, mut read) = ws_stream.split();
+
+    let message = json!({
+        "url": url
+    })
+    .to_string();
+    write.send(Message::Text(message)).await?;
+
+    if let Some(msg) = read.next().await {
+        match msg? {
+            Message::Text(text) => {
+                let parsed: Value = serde_json::from_str(&text)?;
+                if let Some(content) = parsed.get("content") {
+                    return Ok(content.as_str().unwrap_or_default().to_string());
+                }
+                Err("Content not found in response".into())
+            }
+            _ => Err("Unexpected message type".into()),
+        }
+    } else {
+        Err("No response received".into())
+    }
 }

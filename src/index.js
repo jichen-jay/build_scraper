@@ -6,7 +6,7 @@ import fs from "fs";
 import { minify } from "html-minifier-terser";
 import { sanitizePageContent } from "./contentSanitizer.js";
 import { removeScrollBlockers } from "./scrollBlockerRemover.js";
-import net from 'net';
+import { WebSocketServer } from 'ws';
 
 const purifyContent = `${fs.readFileSync("./src/purify.min.js", "utf8")}`;
 let browser;
@@ -86,7 +86,7 @@ async function openOneTab(targetUrl) {
 
     await page.goto(validUrl, {
       waitUntil: "domcontentloaded",
-      timeout: 45000,
+      timeout: 43000,
     });
 
     const htmlContent = await page.content();
@@ -201,58 +201,115 @@ async function openOneTab(targetUrl) {
   }
 }
 
-const server = net.createServer(async (socket) => {
-  socket.on('data', async (chunk) => {
-    const data = chunk.toString();
-    const urlMatch = data.match(/GET \/scrape\/([^\s]+) HTTP/); // Modified regex to match HTTP GET request
-
-    const headers = [
-      'HTTP/1.1 200 OK',
-      'Content-Type: application/json',
-      'Content-Length: ${length}',
-      'Connection: close',
-      '',
-      ''  // Double empty line is important
-    ].join('\r\n');
-
-    if (urlMatch) {
-      try {
-        const url = decodeURIComponent(urlMatch[1]);
-        if (!url.startsWith('http://') && !url.startsWith('https://')) {
-          throw new Error('URL must start with http:// or https://');
-        }
-
-        const content = await openOneTab(url);
-        const response = JSON.stringify({
-          status: 'success',
-          content
-        });
-
-        socket.write(headers.replace('${length}', Buffer.byteLength(response)) + response);
-      } catch (error) {
-        const errorResponse = JSON.stringify({
-          status: 'error',
-          error: error.message
-        });
-        socket.write(headers.replace('${length}', Buffer.byteLength(errorResponse)) + errorResponse);
-      }
-    } else {
-      const errorResponse = JSON.stringify({
-        status: 'error',
-        error: 'Invalid request format. Use /scrape/https://example.com'
-      });
-      socket.write(headers.replace('${length}', Buffer.byteLength(errorResponse)) + errorResponse);
-    }
-    socket.end();
-  });
-});
-
-
 (async () => {
   await initializeBrowser();
-  const PORT = 3000;
-  server.listen(PORT, () => {
-    console.log(`Scraper service listening on port ${PORT}`);
-  });
-})();
 
+  let retries = 5;
+  const createServer = () => {
+    try {
+      const wss = new WebSocketServer({ port: 3000 })
+        .on('error', (e) => {
+          if (e.code === 'EADDRINUSE' && retries > 0) {
+            console.log(`Port 3000 in use, retrying... (${retries} attempts left)`);
+            retries--;
+            setTimeout(() => {
+              wss.close();
+              createServer();
+            }, 1000);
+          } else {
+            console.error('Server error:', e);
+          }
+        })
+        .on('listening', () => {
+          console.log('WebSocket scraper listening on port 3000');
+        });
+
+      wss.on('connection', async (ws) => {
+        console.log('Client connected');
+
+        ws.on('message', async (message) => {
+          try {
+            const data = JSON.parse(message);
+            console.log('Received request:', data);
+
+            if (!data.url) {
+              throw new Error('URL is required');
+            }
+
+            const url = data.url;
+            if (!url.startsWith('http://') && !url.startsWith('https://')) {
+              throw new Error('URL must start with http:// or https://');
+            }
+
+            console.log('Scraping URL:', url);
+            const content = await openOneTab(url);
+
+            const response = JSON.stringify({
+              status: 'success',
+              content: content
+            });
+
+            console.log('Sending response length:', response.length);
+            ws.send(response);
+          } catch (error) {
+            console.error('Error:', error);
+            ws.send(JSON.stringify({
+              status: 'error',
+              error: error.message
+            }));
+          }
+        });
+
+        ws.on('error', (error) => {
+          console.error('WebSocket error:', error);
+        });
+
+        ws.on('close', () => {
+          console.log('Client disconnected');
+        });
+      });
+
+      // Heartbeat mechanism
+      function heartbeat() {
+        this.isAlive = true;
+      }
+
+      wss.on('connection', function connection(ws) {
+        ws.isAlive = true;
+        ws.on('pong', heartbeat);
+      });
+
+      const interval = setInterval(function ping() {
+        wss.clients.forEach(function each(ws) {
+          if (ws.isAlive === false) return ws.terminate();
+          ws.isAlive = false;
+          ws.ping(() => { });
+        });
+      }, 30000);
+
+      wss.on('close', function close() {
+        clearInterval(interval);
+      });
+
+      process.on('SIGINT', async () => {
+        console.log('Shutting down...');
+        if (browser) {
+          await browser.close();
+        }
+        wss.close(() => {
+          process.exit(0);
+        });
+      });
+
+      return wss;
+    } catch (error) {
+      console.error('Failed to create server:', error);
+      if (retries > 0) {
+        retries--;
+        setTimeout(createServer, 1000);
+      }
+    }
+  };
+
+  createServer();
+})();
